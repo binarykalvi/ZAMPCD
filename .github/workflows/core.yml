@@ -21,6 +21,8 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: Downloader
+        env:
+          ZOOM_URL: ${{ github.event.client_payload.zoom_url }}
         run: |
           set -eo pipefail
 
@@ -32,7 +34,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Download recording"
-          python3 zoom_downloader.py "${{ github.event.client_payload.zoom_url }}" \
+          python3 zoom_downloader.py "$ZOOM_URL" \
             > /tmp/zoom_dl.log 2>&1 || true
 
           sed -E 's#https://[^ ]*\.mp4[^ ]*#<mp4-url-redacted>#g' /tmp/zoom_dl.log
@@ -50,10 +52,14 @@ jobs:
 
       - name: Y U
         env:
-          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-          VIDEO_TITLE: ${{ github.event.client_payload.title }}
-          VIDEO_DESCRIPTION: ${{ github.event.client_payload.description }}
-          VIDEO_VISIBILITY: ${{ github.event.client_payload.visibility }}
+          VIDEO_TITLE:           ${{ github.event.client_payload.title || github.event.client_payload.meeting_name }}
+          VIDEO_DESCRIPTION:     ${{ github.event.client_payload.description }}
+          VIDEO_VISIBILITY:      ${{ github.event.client_payload.visibility }}
+          ZOOM_ACCOUNT_ID:       ${{ secrets.ZOOM_ACCOUNT_ID }}
+          ZOOM_CLIENT_ID:        ${{ secrets.ZOOM_CLIENT_ID }}
+          ZOOM_CLIENT_SECRET:    ${{ secrets.ZOOM_CLIENT_SECRET }}
+          ZOOM_MEETING_UUID:     ${{ github.event.client_payload.meeting_uuid }}
         run: node upload.js
