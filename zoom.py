@@ -67,14 +67,22 @@ def fetch_recordings(token: str):
     return r.json().get("meetings", [])
 
 
-def dispatch_to_github(zoom_url, meeting_name, record_date, meeting_uuid,
+def build_title(topic: str, record_date: str) -> str:
+    """Webinar name + record date → 'Topic - YYYY-MM-DD'."""
+    topic = (topic or "").strip()
+    if topic and record_date:
+        return f"{topic} - {record_date}"
+    return topic or record_date or "Zoom Recording"
+
+
+def dispatch_to_github(zoom_url, title, meeting_name, record_date, meeting_uuid,
                        description, visibility) -> bool:
     url = f"https://api.github.com/repos/{GH_REPO}/dispatches"
     payload = {
         "event_type": DISPATCH_TYPE,
         "client_payload": {
             "zoom_url":     zoom_url,
-            "title":        meeting_name, 
+            "title":        title,         
             "meeting_name": meeting_name,   
             "record_date":  record_date,
             "meeting_uuid": meeting_uuid,   
@@ -126,6 +134,8 @@ def main():
         record_date  = start_time[:10] if start_time else datetime.now().strftime("%Y-%m-%d")
         meeting_uuid = m.get("uuid", "") or m.get("id", "")
 
+        title = build_title(topic, record_date)
+
         files = m.get("recording_files", [])
         if not files:
             continue
@@ -140,6 +150,7 @@ def main():
 
         ok = dispatch_to_github(
             zoom_url=zoom_url,
+            title=title,
             meeting_name=topic,
             record_date=record_date,
             meeting_uuid=meeting_uuid,
