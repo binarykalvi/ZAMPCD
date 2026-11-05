@@ -5,12 +5,12 @@ const https = require('https');
 
 const OAuth2 = google.auth.OAuth2;
 
-const client_id = process.env.YOUTUBE_CLIENT_ID;
+const client_id     = process.env.YOUTUBE_CLIENT_ID;
 const client_secret = process.env.YOUTUBE_CLIENT_SECRET;
 const refresh_token = process.env.YOUTUBE_REFRESH_TOKEN;
 
-const baseTitle = process.env.VIDEO_TITLE;
-const description = process.env.VIDEO_DESCRIPTION;
+const baseTitle     = process.env.VIDEO_TITLE;
+const description   = process.env.VIDEO_DESCRIPTION;
 const privacyStatus = process.env.VIDEO_VISIBILITY;
 
 const ZOOM_ACCOUNT_ID    = process.env.ZOOM_ACCOUNT_ID;
@@ -19,6 +19,7 @@ const ZOOM_CLIENT_SECRET = process.env.ZOOM_CLIENT_SECRET;
 const ZOOM_MEETING_UUID  = process.env.ZOOM_MEETING_UUID;
 
 if (!client_id || !client_secret || !refresh_token) {
+  console.error('Missing YouTube credentials.');
   process.exit(1);
 }
 
@@ -47,9 +48,7 @@ function getAllMp4Files(dir, fileList = []) {
 }
 
 function filterHighestQualityVideos(allFiles) {
-  if (allFiles.length === 1) {
-    return allFiles;
-  }
+  if (allFiles.length === 1) return allFiles;
 
   const grouped = {};
 
@@ -60,9 +59,7 @@ function filterHighestQualityVideos(allFiles) {
     const match = fileName.match(/GMT\d+-\d+/);
     const key = match ? match[0] : filePath;
 
-    if (!grouped[key]) {
-      grouped[key] = [];
-    }
+    if (!grouped[key]) grouped[key] = [];
     grouped[key].push(filePath);
   }
 
@@ -71,24 +68,12 @@ function filterHighestQualityVideos(allFiles) {
   for (const key in grouped) {
     const group = grouped[key];
     let best = group.find(f => f.endsWith('1280x720.mp4') && !f.includes('_as_'));
-
-    if (!best) {
-      best = group.find(f => f.includes('1280x720.mp4'));
-    }
-
-    if (!best) {
-      best = group.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)[0];
-    }
-
-    if (best) {
-      selectedFiles.push(best);
-    }
+    if (!best) best = group.find(f => f.includes('1280x720.mp4'));
+    if (!best) best = group.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)[0];
+    if (best) selectedFiles.push(best);
   }
 
-  if (selectedFiles.length === 0 && allFiles.length > 0) {
-    return allFiles;
-  }
-
+  if (selectedFiles.length === 0 && allFiles.length > 0) return allFiles;
   return selectedFiles.sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
 
@@ -96,21 +81,12 @@ async function uploadSingleVideo(videoPath, videoTitle) {
   const res = await youtube.videos.insert({
     part: 'snippet,status',
     requestBody: {
-      snippet: {
-        title: videoTitle,
-        description: description,
-      },
-      status: {
-        privacyStatus: privacyStatus,
-      },
+      snippet: { title: videoTitle, description },
+      status:  { privacyStatus },
     },
-    media: {
-      body: fs.createReadStream(videoPath),
-    },
+    media: { body: fs.createReadStream(videoPath) },
   });
-
   fs.unlinkSync(videoPath);
-
   return res.data.id;
 }
 
@@ -137,9 +113,9 @@ function getZoomAccessToken() {
         try {
           const json = JSON.parse(body);
           if (json.access_token) resolve(json.access_token);
-          else reject(new Error('Zoom token error'));
+          else reject(new Error(`Zoom token error: ${body}`));
         } catch (e) {
-          reject(new Error('Zoom token parse error'));
+          reject(new Error(`Zoom token parse error: ${body}`));
         }
       });
     });
@@ -153,13 +129,14 @@ function getZoomAccessToken() {
 function deleteZoomRecording(accessToken, meetingId) {
   return new Promise((resolve, reject) => {
     let encodedId = encodeURIComponent(meetingId);
-    if (meetingId.startsWith('/') || meetingId.includes('//')) {
-      encodedId = encodeURIComponent(encodedId);
-    }
+    const isWebinar = meetingId.startsWith('/') || meetingId.includes('//');
+    if (isWebinar) encodedId = encodeURIComponent(encodedId);
+
+    const kind = isWebinar ? 'webinars' : 'meetings';
 
     const options = {
       hostname: 'api.zoom.us',
-      path: `/v2/meetings/${encodedId}/recordings?action=trash`,
+      path: `/v2/${kind}/${encodedId}/recordings?action=trash`,
       method: 'DELETE',
       headers: {
         'Authorization': `Bearer ${accessToken}`,
@@ -171,8 +148,11 @@ function deleteZoomRecording(accessToken, meetingId) {
       let body = '';
       res.on('data', (c) => body += c);
       res.on('end', () => {
-        if (res.statusCode === 204) resolve(true);
-        else reject(new Error(`Zoom delete failed (${res.statusCode})`));
+        if (res.statusCode === 204 || res.statusCode === 200) {
+          resolve(true);
+        } else {
+          reject(new Error(`Zoom trash failed (${res.statusCode}): ${body}`));
+        }
       });
     });
 
@@ -185,6 +165,7 @@ async function main() {
   const allFiles = getAllMp4Files(process.cwd());
 
   if (allFiles.length === 0) {
+    console.error('No .mp4 files found to upload.');
     process.exit(1);
   }
 
@@ -197,25 +178,35 @@ async function main() {
       : baseTitle;
 
     try {
-      await uploadSingleVideo(file, finalTitle);
+      const id = await uploadSingleVideo(file, finalTitle);
+      console.log(`Uploaded: ${finalTitle} → https://youtu.be/${id}`);
     } catch (error) {
+      console.error(`Upload failed for ${file}:`, error.message);
       process.exit(1);
     }
   }
 
-  if (ZOOM_MEETING_UUID && ZOOM_ACCOUNT_ID) {
+  const missing = [
+    ['ZOOM_MEETING_UUID',  ZOOM_MEETING_UUID],
+    ['ZOOM_ACCOUNT_ID',    ZOOM_ACCOUNT_ID],
+    ['ZOOM_CLIENT_ID',     ZOOM_CLIENT_ID],
+    ['ZOOM_CLIENT_SECRET', ZOOM_CLIENT_SECRET],
+  ].filter(([, v]) => !v).map(([k]) => k);
+
+  if (missing.length === 0) {
     try {
       const zoomToken = await getZoomAccessToken();
       await deleteZoomRecording(zoomToken, ZOOM_MEETING_UUID);
+      console.log(`Zoom recording ${ZOOM_MEETING_UUID} moved to Trash.`);
     } catch (err) {
+      console.error(`Zoom trash failed for ${ZOOM_MEETING_UUID}:`, err.message);
     }
+  } else {
+    console.warn(`Zoom trash skipped — missing env: ${missing.join(', ')}`);
   }
 
-  const remainingFiles = getAllMp4Files(process.cwd());
-  for (const remaining of remainingFiles) {
-    if (fs.existsSync(remaining)) {
-      fs.unlinkSync(remaining);
-    }
+  for (const remaining of getAllMp4Files(process.cwd())) {
+    if (fs.existsSync(remaining)) fs.unlinkSync(remaining);
   }
 }
 
